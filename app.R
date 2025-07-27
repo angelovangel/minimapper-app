@@ -144,71 +144,86 @@ server <- function(input, output, session) {
   
   # progress bar
   progress_val <- reactiveVal(0)
-
-  #main
+  proc <- reactiveVal(NULL) # store process object per session
+  
   observeEvent(input$start, {
-    #req(input$upload_fastq)
     req(input$upload_fastq)
     req(input$upload_ref)
     
-    #show_alert('Run mapping', 'Start pipeline?')
-    # validations
     arguments <- c('--ref', ref(), '--fastq', fastq(), '--format', input$format, '-ansi-log', 'false')
     
     shinyjs::disable('controls')
     lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-secondary')})
     lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-warning')})
     
+    nsamples <- nrow(input$upload_fastq)
+    inc <- 100/(2 + (6 * nsamples)) # 2 single proc and 6 proc that are per sample
     
-    withCallingHandlers({
-      p <- processx::run(
-        'nextflow',
-        args = c('run', 'angelovangel/nxf-minimapper', '--outdir', paste0('www/', runid), arguments),
-        echo_cmd = T,
-        stderr_to_stdout = TRUE,
-        error_on_status = FALSE,
-        #env = c(NXF_OFFLINE = "TRUE"), # avoid checking for updates
-        spinner = T,
-        stdout_line_callback = function(line, proc) {
-          message(line)
-          if (grepl('Submitted process >', line)) {
-            progress_val(progress_val() + 12.5)
-            updateProgressBar(
-              session, id = "pb", value = progress_val()
+    # Start Nextflow asynchronously
+    p <- processx::process$new(
+      'nextflow',
+      args = c(
+        'run', 
+        '-w', paste0('work/', runid), # allows per session cleanup
+        'angelovangel/nxf-minimapper', 
+        '--outdir', file.path('www', runid), arguments),
+      stdout = "|", stderr = "2>&1"
+      # env = c(NXF_OFFLINE = "TRUE") # uncomment if needed
+    )
+    proc(p) # store process object
+    
+    # Poll process output
+    observe({
+      invalidateLater(500, session)
+      p <- proc()
+      if (!is.null(p)) {
+        if (p$is_alive()) {
+          lines <- p$read_output_lines()
+          for (line in lines) {
+            message(line)
+            if (grepl('Submitted process >', line)) {
+              progress_val(progress_val() + inc)
+              updateProgressBar(session, id = "pb", value = progress_val())
+            }
+            shinyjs::html(
+              id = "stdout",
+              html = paste0(gsub("\n", "<br>", line), "<br>"),
+              add = TRUE
+            )
+            runjs("document.getElementById('stdout').parentElement.scrollTo({ top: 1e9, behavior: 'smooth' });")
+          }
+        } else {
+          # Process finished
+          lines <- p$read_all_output_lines()
+          for (line in lines) {
+            shinyjs::html(
+              id = "stdout",
+              html = paste0(gsub("\n", "<br>", line), "<br>"),
+              add = TRUE
             )
           }
+          if (p$get_exit_status() == 0) {
+            notify_success('Processing finished', position = 'center-bottom')
+            shinyjs::enable('controls')
+            lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-warning')})
+            lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-success')})
+            shinyjs::hide(id = 'pb')
+            output$download_ui <- renderUI({
+              downloadLink('download', 'Download data')
+            })
+            output$report_ui <- renderUI({
+              pathtoreport <- paste0(runid, '/00-alignment-summary.html')
+              actionLink(
+                'report', 'View HTML report',
+                onclick = sprintf("window.open('%s', '_blank')", pathtoreport)
+              )
+            })
+          }
+          proc(NULL) # clear process object
+          return(NULL)
         }
-      )
-    }, message = function(m) {
-      shinyjs::html(
-        id = "stdout",
-        html = gsub("\n", "<br>", m$message),
-        add = TRUE)
-      runjs("document.getElementById('stdout').parentElement.scrollTo({ top: 1e9, behavior: 'smooth' });")
+      }
     })
-    
-    if(p$status == 0) {
-      notify_success(paste0('Procesing finished'), position = 'center-bottom')
-      shinyjs::enable('controls')
-      lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-warning')})
-      lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-success')})
-      shinyjs::hide(id = 'pb')
-      
-      output$download_ui <- renderUI({
-        downloadLink('download', 'Download data')
-      })
-      
-      output$report_ui <- renderUI({
-        #report_hash <- sprintf("%s-%s.html", 'faster-report', digest::digest(runif(1), algo = 'crc32') )
-        pathtoreport <- paste0(runid, '/00-alignment-summary.html')
-        
-        actionLink(
-          'report', 'View HTML report',
-          onclick = sprintf("window.open('%s', '_blank')", pathtoreport)
-        )
-      })
-    }
-    
   })
   
   observeEvent(input$reset, {
@@ -231,14 +246,21 @@ server <- function(input, output, session) {
   }
 )
   
-  
+  session$onSessionEnded(function() {
+    # Clean up only this user's files, e.g. by runid
+    user_www <- file.path("www", runid)
+    user_work <- file.path("work", runid)
+    if (dir.exists(user_www)) fs::dir_delete(user_www)
+    if (dir.exists(user_work)) fs::dir_delete(user_work)
+  })
+
 }
 
-cleanup <- function() {
-  workfiles <- list.files(path = "work", full.names = T)
-  wwwfiles <- list.files(path = 'www', full.names = T)
-  lapply(c(workfiles, wwwfiles), fs::dir_delete)
-}
-onStop(function() { cleanup() })
+# cleanup <- function() {
+#   workfiles <- list.files(path = "work", full.names = T)
+#   #wwwfiles <- list.files(path = 'www', full.names = T)
+#   lapply(c(workfiles), fs::dir_delete)
+# }
+# onStop(function() { cleanup() })
 
 shinyApp(ui, server)
