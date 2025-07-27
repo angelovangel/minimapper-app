@@ -77,8 +77,9 @@ ui <- page_navbar(
   theme = bs_theme(bootswatch = 'yeti', primary = '#196F3D'),
   sidebar = sidebar,
   #nav_panel(
+  
   card(
-    card_header('Results'),
+    card_header(id = 'header1', class = 'bg-secondary', 'Results'),
     height = 150,
     card_body(
       uiOutput('download_ui'),
@@ -86,18 +87,23 @@ ui <- page_navbar(
       #downloadLink('download', 'Download results')
     )
   ),
+  
   card(
-    card_header('Output'),
+    card_header(id = 'header2', class = 'bg-secondary', 'Output'),
     height = 450,
     card_body(
       verbatimTextOutput('stdout')
     )
-  )
-  #)
+  ),
+
+  tags$style(HTML("
+  .progress-number { color: transparent !important; }
+  .progress-number { display: none !important; }
+  ")),
+  progressBar(id = "pb", value = 0, total = 100, status = "warning", display_pct = FALSE, title = "")
 )
 
 server <- function(input, output, session) {
-  
   
   ##
   options(shiny.maxRequestSize=1000*1024^2)
@@ -112,8 +118,12 @@ server <- function(input, output, session) {
     notify_failure('nextflow and/or docker not found!', position = 'center-bottom')
   } else {
     notify_success('The server is ready!', position = 'center-bottom')
+    #show_alert('OK', 'The server is ready!', type = 'success', )
   }
   
+  output$stdout <- renderText({
+    paste0('Run id: ', runid, '\n')
+  })
   
   ref <- reactive({
     rname <- input$upload_ref$name
@@ -131,20 +141,24 @@ server <- function(input, output, session) {
     fs::path_dir(fpaths[1])
   })
   
-  output$stdout <- renderPrint({
-   
-  })
   
+  # progress bar
+  progress_val <- reactiveVal(0)
+
   #main
   observeEvent(input$start, {
     #req(input$upload_fastq)
     req(input$upload_fastq)
     req(input$upload_ref)
     
+    #show_alert('Run mapping', 'Start pipeline?')
     # validations
     arguments <- c('--ref', ref(), '--fastq', fastq(), '--format', input$format, '-ansi-log', 'false')
     
     shinyjs::disable('controls')
+    lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-secondary')})
+    lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-warning')})
+    
     
     withCallingHandlers({
       p <- processx::run(
@@ -153,14 +167,22 @@ server <- function(input, output, session) {
         echo_cmd = T,
         stderr_to_stdout = TRUE,
         error_on_status = FALSE,
+        #env = c(NXF_OFFLINE = "TRUE"), # avoid checking for updates
+        spinner = T,
         stdout_line_callback = function(line, proc) {
           message(line)
+          if (grepl('Submitted process >', line)) {
+            progress_val(progress_val() + 12.5)
+            updateProgressBar(
+              session, id = "pb", value = progress_val()
+            )
+          }
         }
       )
     }, message = function(m) {
       shinyjs::html(
         id = "stdout",
-        html = m$message,
+        html = gsub("\n", "<br>", m$message),
         add = TRUE)
       runjs("document.getElementById('stdout').parentElement.scrollTo({ top: 1e9, behavior: 'smooth' });")
     })
@@ -168,6 +190,9 @@ server <- function(input, output, session) {
     if(p$status == 0) {
       notify_success(paste0('Procesing finished'), position = 'center-bottom')
       shinyjs::enable('controls')
+      lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-warning')})
+      lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-success')})
+      shinyjs::hide(id = 'pb')
       
       output$download_ui <- renderUI({
         downloadLink('download', 'Download data')
@@ -184,6 +209,10 @@ server <- function(input, output, session) {
       })
     }
     
+  })
+  
+  observeEvent(input$reset, {
+    session$reload()
   })
   
   output$download <- downloadHandler(
