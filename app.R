@@ -40,7 +40,7 @@ sidebar <- sidebar(
         "Upload reference file containing one sequence (fasta, genbank, embl or snapgene)",
         placement = "right")
     ), 
-    multiple = F, accept = c('.fa', '.fasta', '.dna'), placeholder = 'reference'),
+    multiple = F, accept = c('.fa', '.fasta', '.dna', '.gbk', '.genbank'), placeholder = 'reference'),
   
   # if more than 1, the uploaded files will be placed in a tmp folder on the server and
   # then passed to the nxf script as dir
@@ -129,6 +129,11 @@ server <- function(input, output, session) {
     rname <- input$upload_ref$name
     rpath <- input$upload_ref$datapath
     
+    # Remove whitespace and non-ASCII characters from reference name
+    rname <- gsub("\\s+", "_", rname)                # Replace whitespace with underscore
+    rname <- iconv(rname, to = "ASCII//TRANSLIT")    # Remove/convert non-ASCII
+    rname <- gsub("[^A-Za-z0-9._-]", "", rname)      # Remove any remaining unwanted chars
+    
     fs::file_move(rpath, fs::path(fs::path_dir(rpath), rname))
     fs::path(fs::path_dir(rpath), rname)
   })
@@ -136,6 +141,12 @@ server <- function(input, output, session) {
   fastq <- reactive({
     fnames <- input$upload_fastq$name
     fpaths <- input$upload_fastq$datapath
+    
+    # Remove whitespace and non-ASCII characters from reference name
+    fnames <- gsub("\\s+", "_", fnames)                # Replace whitespace with underscore
+    fnames <- iconv(fnames, to = "ASCII//TRANSLIT")    # Remove/convert non-ASCII
+    fnames <- gsub("[^A-Za-z0-9._-]", "", fnames)      # Remove any remaining unwanted chars
+    fnames <- make.unique(fnames, sep = "_")           # make sure sample names are unique
     
     fs::file_move(fpaths, fs::path(fs::path_dir(fpaths), fnames))
     fs::path_dir(fpaths[1])
@@ -187,7 +198,7 @@ server <- function(input, output, session) {
             }
             shinyjs::html(
               id = "stdout",
-              html = paste0(gsub("\n", "<br>", line), "<br>"),
+              html = paste0("<br>", line),
               add = TRUE
             )
             runjs("document.getElementById('stdout').parentElement.scrollTo({ top: 1e9, behavior: 'smooth' });")
@@ -218,6 +229,13 @@ server <- function(input, output, session) {
                 onclick = sprintf("window.open('%s', '_blank')", pathtoreport)
               )
             })
+          } else {
+            notify_failure('Processing failed', position = 'center-bottom')
+            shinyjs::enable('controls')
+            lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-warning')})
+            shinyjs::hide(id = 'pb')
+            output$download_ui <- renderUI({ NULL })
+            output$report_ui <- renderUI({ NULL })
           }
           proc(NULL) # clear process object
           return(NULL)
