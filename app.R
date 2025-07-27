@@ -8,7 +8,6 @@ library(dplyr)
 library(processx)
 library(shinybusy)
 library(digest)
-library(shinyvalidate)
 library(hover)
 
 bin_on_path = function(bin) {
@@ -40,7 +39,7 @@ sidebar <- sidebar(
         "Upload reference file containing one sequence (fasta, genbank, embl or snapgene)",
         placement = "right")
     ), 
-    multiple = F, accept = c('.fa', '.fasta', '.dna', '.gbk', '.genbank'), placeholder = 'reference'),
+    multiple = F, accept = c('.fa', '.fasta', '.dna', '.gbk', '.genbank', '.embl'), placeholder = 'reference'),
   
   # if more than 1, the uploaded files will be placed in a tmp folder on the server and
   # then passed to the nxf script as dir
@@ -62,24 +61,22 @@ sidebar <- sidebar(
 )
 
 ui <- page_navbar(
-  # header = 
-  #   tags$a('Live terminal view',
-  #   tooltip(
-  #   bsicons::bs_icon("question-circle"),
-  #   "Preview of the terminal, for viewing the selected parameters and monitor output",
-  #   placement = "right")),
   
   useShinyjs(),
   use_hover(),
+  
   
   fillable = F,
   title = 'nxf-minimapper app',
   theme = bs_theme(bootswatch = 'yeti', primary = '#196F3D'),
   sidebar = sidebar,
-  #nav_panel(
   
   card(
-    card_header(id = 'header1', class = 'bg-secondary', 'Results'),
+    card_header(
+      id = 'header1', 
+      class = 'bg-secondary', 
+      tags$a('Results', tooltip(bsicons::bs_icon("question-circle"), 'Results are not stored on the server, please download.'))
+    ),
     height = 150,
     card_body(
       uiOutput('download_ui'),
@@ -89,7 +86,11 @@ ui <- page_navbar(
   ),
   
   card(
-    card_header(id = 'header2', class = 'bg-secondary', 'Output'),
+    card_header(
+      id = 'header2', 
+      class = 'bg-secondary', 
+      tags$a('Output', tooltip(bsicons::bs_icon("question-circle"), 'Output from the nxf-minimapper pipeline'))
+  ),
     height = 450,
     card_body(
       verbatimTextOutput('stdout')
@@ -133,6 +134,22 @@ server <- function(input, output, session) {
     rname <- gsub("\\s+", "_", rname)                # Replace whitespace with underscore
     rname <- iconv(rname, to = "ASCII//TRANSLIT")    # Remove/convert non-ASCII
     rname <- gsub("[^A-Za-z0-9._-]", "", rname)      # Remove any remaining unwanted chars
+
+    # Check file extension matches selected format
+    ext <- tools::file_ext(rname)
+    valid_ext <- switch(
+      input$format,
+      fasta = c("fa", "fasta"),
+      genbank = c("gbk", "genbank"),
+      embl = c("embl"),
+      snapgene = c("dna"),
+      character(0)
+    )
+    if (!(tolower(ext) %in% valid_ext)) {
+      notify_failure('Invalid reference file, please select correct format', position = 'center-bottom') 
+      validate("Invalid reference file format.")
+    }
+
     
     fs::file_move(rpath, fs::path(fs::path_dir(rpath), rname))
     fs::path(fs::path_dir(rpath), rname)
@@ -158,6 +175,11 @@ server <- function(input, output, session) {
   proc <- reactiveVal(NULL) # store process object per session
   
   observeEvent(input$start, {
+    if (is.null(input$upload_fastq) || is.null(input$upload_ref)) {
+      notify_failure('Please upload both reference and fastq files before starting.', position = 'center-bottom')
+      return()
+    }
+    
     req(input$upload_fastq)
     req(input$upload_ref)
     
@@ -170,6 +192,7 @@ server <- function(input, output, session) {
     nsamples <- nrow(input$upload_fastq)
     inc <- 100/(2 + (6 * nsamples)) # 2 single proc and 6 proc that are per sample
     
+    notify_info('Run started, please wait...', position = 'center-bottom')
     # Start Nextflow asynchronously
     p <- processx::process$new(
       'nextflow',
