@@ -15,14 +15,14 @@ bin_on_path = function(bin) {
   return(exit_code == 0)
 }
 
-log_run <- function(runid, nsamples, session) {
+log_run <- function(runid, nsamples) {
   log_file <- "run_log.csv"
   log_entry <- data.frame(
     runid = runid,
     datetime = as.character(Sys.time()),
     nsamples = nsamples,
-    ip = session$request$REMOTE_ADDR,
-    agent = session$request$HTTP_USER_AGENT,
+    #ip = session$request$REMOTE_ADDR, # errors on the ws
+    #agent = session$request$HTTP_USER_AGENT,
     stringsAsFactors = FALSE
   )
   if (!file.exists(log_file)) {
@@ -230,7 +230,7 @@ server <- function(input, output, session) {
     req(input$upload_ref)
 
     nsamples <- nrow(input$upload_fastq)
-    #log_run(runid, nsamples, session) 
+    log_run(runid, nsamples) 
     inc <- 100/(2 + (6 * nsamples)) # 2 single proc and 6 proc that are per sample
 
     arguments <- c('--ref', ref(), '--fastq', fastq(), '--format', input$format, '-ansi-log', 'false')
