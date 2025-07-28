@@ -230,7 +230,7 @@ server <- function(input, output, session) {
     req(input$upload_ref)
 
     nsamples <- nrow(input$upload_fastq)
-    log_run(runid, nsamples, session) 
+    #log_run(runid, nsamples, session) 
     inc <- 100/(2 + (6 * nsamples)) # 2 single proc and 6 proc that are per sample
 
     arguments <- c('--ref', ref(), '--fastq', fastq(), '--format', input$format, '-ansi-log', 'false')
