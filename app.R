@@ -72,9 +72,10 @@ sidebar <- sidebar(
   
   hover_action_button('start', 'Run mapping', icon = icon('play'), button_animation = 'icon-fade'),
   hr(),
-  hover_action_button('reset', 'Reset inputs', icon = icon('rotate'), button_animation = 'icon-fade'),
-  
-)
+  hover_action_button('reset', 'Reset', icon = icon('rotate'), button_animation = 'icon-fade'),
+  hr(),
+  uiOutput("copy_error_btn")
+  )
 )
 
 ui <- page_navbar(
@@ -287,6 +288,7 @@ server <- function(input, output, session) {
             lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-warning')})
             lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-success')})
             shinyjs::hide(id = 'pb')
+            output$copy_error_btn <- renderUI({ NULL })
             output$download_ui <- renderUI({
               downloadLink('download', 'Download data')
             })
@@ -301,8 +303,13 @@ server <- function(input, output, session) {
             notify_failure('Processing failed', position = 'center-bottom')
             shinyjs::enable('controls')
             lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-warning')})
-            lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-error')})
+            lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-danger')})
             shinyjs::hide(id = 'pb')
+
+            output$copy_error_btn <- renderUI({
+              hover_action_button("copy_error", "Copy error to clipboard", icon = icon("clipboard"), button_animation = 'icon-fade', style = "color: red;")
+            })
+
             output$download_ui <- renderUI({ NULL })
             output$report_ui <- renderUI({ NULL })
           }
@@ -315,6 +322,13 @@ server <- function(input, output, session) {
   
   observeEvent(input$reset, {
     session$reload()
+  })
+
+  observeEvent(input$copy_error, {
+  runjs(sprintf(
+    "navigator.clipboard.writeText(document.getElementById('stdout').innerText);"
+  ))
+  notify_success("Error output copied to clipboard!", position = "center-bottom")
   })
   
   output$download <- downloadHandler(
