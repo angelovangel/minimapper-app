@@ -15,8 +15,25 @@ bin_on_path = function(bin) {
   return(exit_code == 0)
 }
 
+log_run <- function(runid, nsamples, session) {
+  log_file <- "run_log.csv"
+  log_entry <- data.frame(
+    runid = runid,
+    datetime = as.character(Sys.time()),
+    nsamples = nsamples,
+    ip = session$request$REMOTE_ADDR,
+    agent = session$request$HTTP_USER_AGENT,
+    stringsAsFactors = FALSE
+  )
+  if (!file.exists(log_file)) {
+    write.table(log_entry, log_file, sep = ",", row.names = FALSE, col.names = TRUE, append = FALSE)
+  } else {
+    write.table(log_entry, log_file, sep = ",", row.names = FALSE, col.names = FALSE, append = TRUE)
+  }
+}
+
 sidebar <- sidebar(
-  title = 'Inputs',
+  title = '',
   
   # controls
   shiny::div(
@@ -36,7 +53,7 @@ sidebar <- sidebar(
     tags$a(
       'Upload reference',  
       tooltip(bsicons::bs_icon("question-circle"),
-        "Upload reference file containing one sequence (fasta, genbank, embl or snapgene)",
+        "Upload reference file containing ONE sequence (fasta, genbank, embl or snapgene).",
         placement = "right")
     ), 
     multiple = F, accept = c('.fa', '.fasta', '.dna', '.gbk', '.genbank', '.embl'), placeholder = 'reference'),
@@ -48,7 +65,7 @@ sidebar <- sidebar(
     tags$a(
       'Upload fastq',  
       tooltip(bsicons::bs_icon("question-circle"),
-        "Upload either one fastq file or more fastq files to be mapped to the reference",
+        "Upload either one or more fastq files to be mapped to the reference. Max file size allowed: 1 Gb",
         placement = "right")
     ), 
     multiple = T, accept = c('.fastq', '.gz', '.fq'), placeholder = 'fastq file(s)'),
@@ -67,7 +84,17 @@ ui <- page_navbar(
   
   
   fillable = F,
-  title = 'nxf-minimapper app',
+  title = tags$span(
+  tags$span(
+    "nxf-minimapper app",
+    style = "font-size: 1.3rem; font-weight: normal;"
+  ),
+  tags$span(
+    icon('align-center'),
+    "Nextflow pipeline to map long reads to a plasmid/amplicon reference.", icon('align-center'),
+    style = "font-size: 0.9rem; font-weight: normal; margin-left: 3em;"
+  )
+  ),
   theme = bs_theme(bootswatch = 'yeti', primary = '#196F3D'),
   sidebar = sidebar,
   
@@ -134,9 +161,14 @@ server <- function(input, output, session) {
     rname <- gsub("\\s+", "_", rname)                # Replace whitespace with underscore
     rname <- iconv(rname, to = "ASCII//TRANSLIT")    # Remove/convert non-ASCII
     rname <- gsub("[^A-Za-z0-9._-]", "", rname)      # Remove any remaining unwanted chars
-
+    
+    # Auto-select correct format
+    
     # Check file extension matches selected format
     ext <- tools::file_ext(rname)
+    # Auto-select correct format based on extension
+    ext <- tolower(tools::file_ext(rname))
+
     valid_ext <- switch(
       input$format,
       fasta = c("fa", "fasta"),
@@ -149,11 +181,24 @@ server <- function(input, output, session) {
       notify_failure('Invalid reference file, please select correct format', position = 'center-bottom') 
       validate("Invalid reference file format.")
     }
-
     
     fs::file_move(rpath, fs::path(fs::path_dir(rpath), rname))
     fs::path(fs::path_dir(rpath), rname)
   })
+
+  observeEvent(input$upload_ref, {
+  req(input$upload_ref)
+  rname <- input$upload_ref$name
+  ext <- tolower(tools::file_ext(rname))
+  auto_format <- dplyr::case_when(
+    ext %in% c("fa", "fasta") ~ "fasta",
+    ext %in% c("gbk", "genbank") ~ "genbank",
+    ext %in% c("embl") ~ "embl",
+    ext %in% c("dna") ~ "snapgene",
+    TRUE ~ "fasta"
+  )
+  updateSelectInput(session, "format", selected = auto_format)
+})
   
   fastq <- reactive({
     fnames <- input$upload_fastq$name
@@ -182,17 +227,17 @@ server <- function(input, output, session) {
     
     req(input$upload_fastq)
     req(input$upload_ref)
-    
+
+    nsamples <- nrow(input$upload_fastq)
+    log_run(runid, nsamples, session) 
+    inc <- 100/(2 + (6 * nsamples)) # 2 single proc and 6 proc that are per sample
+
     arguments <- c('--ref', ref(), '--fastq', fastq(), '--format', input$format, '-ansi-log', 'false')
-    
     shinyjs::disable('controls')
     lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-secondary')})
     lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-warning')})
-    
-    nsamples <- nrow(input$upload_fastq)
-    inc <- 100/(2 + (6 * nsamples)) # 2 single proc and 6 proc that are per sample
-    
     notify_info('Run started, please wait...', position = 'center-bottom')
+
     # Start Nextflow asynchronously
     p <- processx::process$new(
       'nextflow',
@@ -237,7 +282,7 @@ server <- function(input, output, session) {
             )
           }
           if (p$get_exit_status() == 0) {
-            notify_success('Processing finished', position = 'center-bottom')
+            notify_success('Processing finished, please download results!', position = 'center-bottom')
             shinyjs::enable('controls')
             lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-warning')})
             lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-success')})
@@ -256,6 +301,7 @@ server <- function(input, output, session) {
             notify_failure('Processing failed', position = 'center-bottom')
             shinyjs::enable('controls')
             lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-warning')})
+            lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-error')})
             shinyjs::hide(id = 'pb')
             output$download_ui <- renderUI({ NULL })
             output$report_ui <- renderUI({ NULL })
