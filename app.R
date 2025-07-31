@@ -38,6 +38,7 @@ sidebar <- sidebar(
   # controls
   shiny::div(
   id = 'controls',
+  checkboxInput('demo', 'Use demo data', value = FALSE),
   selectInput(
     'format', 
     tags$a(
@@ -188,18 +189,18 @@ server <- function(input, output, session) {
   })
 
   observeEvent(input$upload_ref, {
-  req(input$upload_ref)
-  rname <- input$upload_ref$name
-  ext <- tolower(tools::file_ext(rname))
-  auto_format <- dplyr::case_when(
-    ext %in% c("fa", "fasta") ~ "fasta",
-    ext %in% c("gbk", "genbank") ~ "genbank",
-    ext %in% c("embl") ~ "embl",
-    ext %in% c("dna") ~ "snapgene",
-    TRUE ~ "fasta"
-  )
-  updateSelectInput(session, "format", selected = auto_format)
-})
+    req(input$upload_ref)
+    rname <- input$upload_ref$name
+    ext <- tolower(tools::file_ext(rname))
+    auto_format <- dplyr::case_when(
+      ext %in% c("fa", "fasta") ~ "fasta",
+      ext %in% c("gbk", "genbank") ~ "genbank",
+      ext %in% c("embl") ~ "embl",
+      ext %in% c("dna") ~ "snapgene",
+      TRUE ~ "fasta"
+    )
+    updateSelectInput(session, "format", selected = auto_format)
+  })
   
   fastq <- reactive({
     fnames <- input$upload_fastq$name
@@ -215,25 +216,41 @@ server <- function(input, output, session) {
     fs::path_dir(fpaths[1])
   })
   
+  observeEvent(input$demo, {
+    if (input$demo) {
+      lapply(c('format', 'upload_ref', 'upload_fastq'), function(x) {shinyjs::hide(x)})
+      
+    } else {
+      lapply(c('format', 'upload_ref', 'upload_fastq'), function(x) {shinyjs::show(x)})
+    }
+    
+  })
   
   # progress bar
   progress_val <- reactiveVal(0)
   proc <- reactiveVal(NULL) # store process object per session
   
   observeEvent(input$start, {
-    if (is.null(input$upload_fastq) || is.null(input$upload_ref)) {
+    if ((is.null(input$upload_fastq) || is.null(input$upload_ref)) & !input$demo) {
       notify_failure('Please upload both reference and fastq files before starting.', position = 'center-bottom')
       return()
     }
     
-    req(input$upload_fastq)
-    req(input$upload_ref)
+    #req(input$upload_fastq)
+    #req(input$upload_ref)
 
-    nsamples <- nrow(input$upload_fastq)
+    nsamples <- ifelse(input$demo, 3, nrow(input$upload_fastq))
     log_run(runid, nsamples) 
     inc <- 100/(2 + (6 * nsamples)) # 2 single proc and 6 proc that are per sample
 
-    arguments <- c('--ref', ref(), '--fastq', fastq(), '--format', input$format, '-ansi-log', 'false')
+     
+      if (input$demo) {
+        arguments <- c('--ref', 'www/demo/reference.gbk', '--fastq', 'www/demo/samples', '--format', 'genbank', '-ansi-log', 'false')
+      } else {
+        arguments <- c('--ref', ref(), '--fastq', fastq(), '--format', input$format, '-ansi-log', 'false')
+      }
+      
+      
     shinyjs::disable('controls')
     lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-secondary')})
     lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-warning')})
