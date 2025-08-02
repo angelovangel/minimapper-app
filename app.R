@@ -70,11 +70,20 @@ sidebar <- sidebar(
         placement = "right")
     ), 
     multiple = T, accept = c('.fastq', '.gz', '.fq'), placeholder = 'fastq file(s)'),
-  
+  #hr(),
   hover_action_button('start', 'Run mapping', icon = icon('play'), button_animation = 'icon-fade'),
   hr(),
-  hover_action_button('reset', 'Reset', icon = icon('rotate'), button_animation = 'icon-fade'),
+  hover_action_button('reset', 'Reset input', icon = icon('rotate'), button_animation = 'icon-fade'),
   hr(),
+  checkboxInput('advanced', 'Advanced settings', value = F),
+  conditionalPanel(
+    condition = "input.advanced",
+    selectInput(
+      "profile", "Run profile",
+      c("Singularity" = "singularity", "Docker" = "standard"), 
+      selected = "singularity"
+    )
+  ),
   uiOutput("copy_error_btn")
   )
 )
@@ -263,7 +272,7 @@ server <- function(input, output, session) {
         'run', 
         '-w', paste0('work/', runid), # allows per session cleanup
         'angelovangel/nxf-minimapper', 
-        '--outdir', file.path('www', runid), arguments),
+        '--outdir', file.path('www', runid), arguments, '-profile', input$profile),
       stdout = "|", stderr = "2>&1"
       # env = c(NXF_OFFLINE = "TRUE") # uncomment if needed
     )
