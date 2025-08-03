@@ -15,12 +15,13 @@ bin_on_path = function(bin) {
   return(exit_code == 0)
 }
 
-log_run <- function(runid, nsamples) {
+log_run <- function(runid, nsamples, exit_status) {
   log_file <- "run_log.csv"
   log_entry <- data.frame(
     runid = runid,
     datetime = as.character(Sys.time()),
     nsamples = nsamples,
+    exit_status = exit_status,
     #ip = session$request$REMOTE_ADDR, # errors on the ws
     #agent = session$request$HTTP_USER_AGENT,
     stringsAsFactors = FALSE
@@ -83,6 +84,8 @@ sidebar <- sidebar(
       c("Singularity" = "singularity", "Docker" = "standard"), 
       selected = "singularity"
     )
+    #textInput('minimap_params', 'Minimap parameters', ''),
+    #checkboxInput('include_variants', 'Include variants in report', value = F)
   ),
   uiOutput("copy_error_btn")
   )
@@ -249,7 +252,7 @@ server <- function(input, output, session) {
     #req(input$upload_ref)
 
     nsamples <- ifelse(input$demo, 3, nrow(input$upload_fastq))
-    log_run(runid, nsamples) 
+    #log_run(runid, nsamples) 
     inc <- 100/(2 + (6 * nsamples)) # 2 single proc and 6 proc that are per sample
 
      
@@ -309,6 +312,7 @@ server <- function(input, output, session) {
             )
           }
           if (p$get_exit_status() == 0) {
+            log_run(runid = runid, nsamples = nsamples, exit_status = 0)
             notify_success('Processing finished, please download results!', position = 'center-bottom')
             shinyjs::enable('controls')
             lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-warning')})
@@ -326,6 +330,7 @@ server <- function(input, output, session) {
               )
             })
           } else {
+            log_run(runid = runid, nsamples = nsamples, exit_status = p$get_exit_status())
             notify_failure('Processing failed', position = 'center-bottom')
             shinyjs::enable('controls')
             lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-warning')})
