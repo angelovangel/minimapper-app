@@ -15,11 +15,13 @@ bin_on_path = function(bin) {
   return(exit_code == 0)
 }
 
-log_run <- function(runid, nsamples, exit_status) {
+log_run <- function(runid, nsamples, start_time, exit_status) {
   log_file <- "run_log.csv"
   log_entry <- data.frame(
     runid = runid,
-    datetime = as.character(Sys.time()),
+    start_time = format(start_time),
+    end_time = format(Sys.time(), tz = 'UTC', usetz = FALSE), # it is called when p finishes, tz!
+    #datetime = as.character(Sys.time()),
     nsamples = nsamples,
     exit_status = exit_status,
     #ip = session$request$REMOTE_ADDR, # errors on the ws
@@ -312,7 +314,7 @@ server <- function(input, output, session) {
             )
           }
           if (p$get_exit_status() == 0) {
-            log_run(runid = runid, nsamples = nsamples, exit_status = 0)
+            log_run(runid = runid, start_time = p$get_start_time(), nsamples = nsamples, exit_status = 0)
             notify_success('Processing finished, please download results!', position = 'center-bottom')
             shinyjs::enable('controls')
             lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-warning')})
@@ -330,7 +332,7 @@ server <- function(input, output, session) {
               )
             })
           } else {
-            log_run(runid = runid, nsamples = nsamples, exit_status = p$get_exit_status())
+            log_run(runid = runid, start_time = p$get_start_time(), nsamples = nsamples, exit_status = p$get_exit_status())
             notify_failure('Processing failed', position = 'center-bottom')
             shinyjs::enable('controls')
             lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-warning')})
