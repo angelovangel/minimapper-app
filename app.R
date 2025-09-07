@@ -279,7 +279,7 @@ server <- function(input, output, session) {
         'angelovangel/nxf-minimapper', 
         '--outdir', file.path('www', runid), arguments, '-profile', input$profile),
       stdout = "|", stderr = "2>&1"
-      # env = c(NXF_OFFLINE = "TRUE") # uncomment if needed
+      #env = c("current", NXF_OFFLINE = "TRUE") # uncomment if needed
     )
     proc(p) # store process object
     
