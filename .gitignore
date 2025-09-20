@@ -7,3 +7,5 @@
 output
 work
 run_log.csv
+testdata*
+

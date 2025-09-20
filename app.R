@@ -62,17 +62,43 @@ sidebar <- sidebar(
     ), 
     multiple = F, accept = c('.fa', '.fasta', '.dna', '.gbk', '.genbank', '.embl'), placeholder = 'reference'),
   
+  selectInput(
+    'query_format', 
+    tags$a(
+      'Select query format',
+      tooltip(bsicons::bs_icon("question-circle"),
+              "Select correct format, it is not guessed from the input",
+              placement = "right")
+    ),
+    choices = c('fastq', 'ab1'), multiple = FALSE
+  ),
   # if more than 1, the uploaded files will be placed in a tmp folder on the server and
   # then passed to the nxf script as dir
-  fileInput(
+  # change based on type
+  conditionalPanel(
+    'input.query_format == "fastq"',
+    fileInput(
       'upload_fastq', 
-    tags$a(
-      'Upload fastq',  
+      tags$a(
+      'Upload query fastq',  
       tooltip(bsicons::bs_icon("question-circle"),
         "Upload either one or more fastq files to be mapped to the reference. Max file size allowed: 1 Gb",
-        placement = "right")
-    ), 
-    multiple = T, accept = c('.fastq', '.gz', '.fq'), placeholder = 'fastq file(s)'),
+        placement = "right")), 
+      multiple = T, accept = c('.fastq', '.gz', '.fq'), placeholder = 'fastq file(s)'),
+  ),
+  # change based on type
+  conditionalPanel(
+    'input.query_format == "ab1"',
+    fileInput(
+      'upload_ab1', 
+      tags$a(
+        'Upload query ab1',  
+        tooltip(bsicons::bs_icon("question-circle"),
+                "Upload either one or more ab1 files to be mapped to the reference. Max file size allowed: 1 Gb",
+                placement = "right")), 
+      multiple = T, accept = c('.ab1'), placeholder = 'ab1 file(s)'),
+    checkboxInput('merge_ab1', 'Merge ab1 files in one query', value = FALSE)
+  ),
   #hr(),
   hover_action_button('start', 'Run mapping', icon = icon('play'), button_animation = 'icon-fade'),
   hr(),
@@ -85,9 +111,9 @@ sidebar <- sidebar(
       "profile", "Run profile",
       c("Singularity" = "singularity", "Docker" = "standard"), 
       selected = "singularity"
-    )
+    ),
     #textInput('minimap_params', 'Minimap parameters', ''),
-    #checkboxInput('include_variants', 'Include variants in report', value = F)
+    checkboxInput('include_variants', 'Include variants in report', value = F)
   ),
   uiOutput("copy_error_btn")
   )
@@ -157,6 +183,7 @@ server <- function(input, output, session) {
   runid <- digest::digest(runif(1), algo = 'crc32')
   ##
   
+  
   # check nextflow and docker is on path
   if (!bin_on_path('nextflow') | !bin_on_path('docker')) {
     notify_failure('nextflow and/or docker not found!', position = 'center-bottom')
@@ -217,17 +244,50 @@ server <- function(input, output, session) {
   })
   
   fastq <- reactive({
-    fnames <- input$upload_fastq$name
-    fpaths <- input$upload_fastq$datapath
-    
-    # Remove whitespace and non-ASCII characters from reference name
-    fnames <- gsub("\\s+", "_", fnames)                # Replace whitespace with underscore
-    fnames <- iconv(fnames, to = "ASCII//TRANSLIT")    # Remove/convert non-ASCII
-    fnames <- gsub("[^A-Za-z0-9._-]", "", fnames)      # Remove any remaining unwanted chars
-    fnames <- make.unique(fnames, sep = "_")           # make sure sample names are unique
-    
-    fs::file_move(fpaths, fs::path(fs::path_dir(fpaths), fnames))
-    fs::path_dir(fpaths[1])
+    if (input$query_format == "ab1" && !is.null(input$upload_ab1)) {
+      # Convert ab1 files to fastq using bin/convert-seq.py
+      ab1_files <- input$upload_ab1$datapath
+      fastq_files <- character(length(ab1_files))
+      tdir <- file.path(tempdir(), digest(runif(1), algo = 'crc32')) # stage all files in a separate temp dir
+      dir.create(tdir)
+      for (i in seq_along(ab1_files)) {
+        out_fastq <- tempfile(fileext = ".fastq", tmpdir = tdir)
+        system2("bin/convert-seq.py", c(ab1_files[i], 'abi', out_fastq, 'fastq'))
+        fastq_files[i] <- out_fastq
+      }
+      fnames <- input$upload_ab1$name
+      fnames <- gsub("\\s+", "_", fnames)
+      fnames <- iconv(fnames, to = "ASCII//TRANSLIT")
+      fnames <- gsub("[^A-Za-z0-9._-]", "", fnames)
+      fnames <- make.unique(fnames, sep = "_")
+      # Optionally rename fastq files to match cleaned names
+      for (i in seq_along(fastq_files)) {
+        new_path <- file.path(dirname(fastq_files[i]), paste0(tools::file_path_sans_ext(fnames[i]), ".fastq"))
+        file.rename(fastq_files[i], new_path)
+        fastq_files[i] <- new_path
+      }
+      # merge all ab1 files in one fastq
+      if (input$merge_ab1) {
+        system2('cat', args = c(file.path(tdir, '*.fastq'), '>', file.path(tdir, paste0(runid,'-merged-ab1.fastq'))))
+        file.remove(fastq_files)
+        tdir
+      } else {
+        # Return directory containing fastq files
+        dirname(fastq_files[1])
+      }
+      
+    } else if (input$query_format == "fastq" && !is.null(input$upload_fastq)) {
+      fnames <- input$upload_fastq$name
+      fpaths <- input$upload_fastq$datapath
+      fnames <- gsub("\\s+", "_", fnames)
+      fnames <- iconv(fnames, to = "ASCII//TRANSLIT")
+      fnames <- gsub("[^A-Za-z0-9._-]", "", fnames)
+      fnames <- make.unique(fnames, sep = "_")
+      fs::file_move(fpaths, fs::path(fs::path_dir(fpaths), fnames))
+      fs::path_dir(fpaths[1])
+    } else {
+      NULL
+    }
   })
   
   observeEvent(input$demo, {
@@ -245,15 +305,23 @@ server <- function(input, output, session) {
   proc <- reactiveVal(NULL) # store process object per session
   
   observeEvent(input$start, {
-    if ((is.null(input$upload_fastq) || is.null(input$upload_ref)) & !input$demo) {
-      notify_failure('Please upload both reference and fastq files before starting.', position = 'center-bottom')
+    if ((is.null(fastq()) || is.null(input$upload_ref)) & !input$demo) {
+      notify_failure('Please upload both reference and fastq/ab1 files before starting.', position = 'center-bottom')
       return()
     }
     
     #req(input$upload_fastq)
     #req(input$upload_ref)
 
-    nsamples <- ifelse(input$demo, 3, nrow(input$upload_fastq))
+    nsamples <- if (input$demo) {
+  3
+} else if (input$query_format == "ab1" && !is.null(input$upload_ab1)) {
+  nrow(input$upload_ab1)
+} else if (input$query_format == "fastq" && !is.null(input$upload_fastq)) {
+  nrow(input$upload_fastq)
+} else {
+  0
+}
     #log_run(runid, nsamples) 
     inc <- 100/(2 + (6 * nsamples)) # 2 single proc and 6 proc that are per sample
 
@@ -261,7 +329,7 @@ server <- function(input, output, session) {
       if (input$demo) {
         arguments <- c('--ref', 'www/demo/reference.gbk', '--fastq', 'www/demo/samples', '--format', 'genbank', '-ansi-log', 'false')
       } else {
-        arguments <- c('--ref', ref(), '--fastq', fastq(), '--format', input$format, '-ansi-log', 'false')
+        arguments <- c('--ref', ref(), '--fastq', fastq(), '--format', input$format, ifelse(input$include_variants, '--variants', ''), '-ansi-log', 'false')
       }
       
       
@@ -281,7 +349,7 @@ server <- function(input, output, session) {
       stdout = "|", stderr = "2>&1"
       #env = c("current", NXF_OFFLINE = "TRUE") # uncomment if needed
     )
-    proc(p) # store process object
+    proc(p) # store process
     
     # Poll process output
     observe({
@@ -389,12 +457,5 @@ server <- function(input, output, session) {
   })
 
 }
-
-# cleanup <- function() {
-#   workfiles <- list.files(path = "work", full.names = T)
-#   #wwwfiles <- list.files(path = 'www', full.names = T)
-#   lapply(c(workfiles), fs::dir_delete)
-# }
-# onStop(function() { cleanup() })
 
 shinyApp(ui, server)
