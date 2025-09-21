@@ -15,6 +15,11 @@ bin_on_path = function(bin) {
   return(exit_code == 0)
 }
 
+biopython_on_path = function() {
+  exit_code = suppressWarnings(system2("python3", args = c("-c", "'import Bio'"), stdout = FALSE, stderr = FALSE))
+  return(exit_code == 0)
+}
+
 log_run <- function(runid, nsamples, sample_format, start_time, exit_status) {
   log_file <- "run_log.csv"
   log_entry <- data.frame(
@@ -191,6 +196,13 @@ server <- function(input, output, session) {
   } else {
     notify_success('The server is ready!', position = 'center-bottom')
     #show_alert('OK', 'The server is ready!', type = 'success', )
+  }
+
+  # check biopython
+  if (!biopython_on_path()) {
+    notify_warning('Biopython not found, Sanger files will not work!', position = 'center-bottom')
+  } else {
+    notify_success('Biopython found!', position = 'center-bottom')
   }
   
   output$stdout <- renderText({
