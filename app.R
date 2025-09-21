@@ -15,7 +15,7 @@ bin_on_path = function(bin) {
   return(exit_code == 0)
 }
 
-log_run <- function(runid, nsamples, start_time, exit_status) {
+log_run <- function(runid, nsamples, sample_format, start_time, exit_status) {
   log_file <- "run_log.csv"
   log_entry <- data.frame(
     runid = runid,
@@ -23,6 +23,7 @@ log_run <- function(runid, nsamples, start_time, exit_status) {
     end_time = format(Sys.time(), tz = 'UTC', usetz = FALSE), # it is called when p finishes, tz!
     #datetime = as.character(Sys.time()),
     nsamples = nsamples,
+    sample_format = sample_format,
     exit_status = exit_status,
     #ip = session$request$REMOTE_ADDR, # errors on the ws
     #agent = session$request$HTTP_USER_AGENT,
@@ -314,15 +315,15 @@ server <- function(input, output, session) {
     #req(input$upload_ref)
 
     nsamples <- if (input$demo) {
-  3
-} else if (input$query_format == "ab1" && !is.null(input$upload_ab1)) {
-  nrow(input$upload_ab1)
-} else if (input$query_format == "fastq" && !is.null(input$upload_fastq)) {
-  nrow(input$upload_fastq)
-} else {
-  0
-}
-    #log_run(runid, nsamples) 
+      3
+    } else if (input$query_format == "ab1" && !is.null(input$upload_ab1)) {
+      nrow(input$upload_ab1)
+    } else if (input$query_format == "fastq" && !is.null(input$upload_fastq)) {
+      nrow(input$upload_fastq)
+    } else {
+      0
+    }
+    
     inc <- 100/(2 + (6 * nsamples)) # 2 single proc and 6 proc that are per sample
 
      
@@ -382,7 +383,7 @@ server <- function(input, output, session) {
             )
           }
           if (p$get_exit_status() == 0) {
-            log_run(runid = runid, start_time = p$get_start_time(), nsamples = nsamples, exit_status = 0)
+            log_run(runid = runid, start_time = p$get_start_time(), nsamples = nsamples, sample_format = input$query_format, exit_status = 0)
             notify_success('Processing finished, please download results!', position = 'center-bottom')
             shinyjs::enable('controls')
             lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-warning')})
@@ -400,7 +401,7 @@ server <- function(input, output, session) {
               )
             })
           } else {
-            log_run(runid = runid, start_time = p$get_start_time(), nsamples = nsamples, exit_status = p$get_exit_status())
+            log_run(runid = runid, start_time = p$get_start_time(), nsamples = nsamples, sample_format = input$query_format, exit_status = p$get_exit_status())
             notify_failure('Processing failed', position = 'center-bottom')
             shinyjs::enable('controls')
             lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-warning')})
