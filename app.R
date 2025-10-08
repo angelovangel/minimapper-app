@@ -100,7 +100,7 @@ sidebar <- sidebar(
       tags$a(
         'Upload query ab1',  
         tooltip(bsicons::bs_icon("question-circle"),
-                "Upload either one or more ab1 files to be mapped to the reference. Max file size allowed: 1 Gb",
+                "Upload either one or more ab1 files to be mapped to the reference",
                 placement = "right")), 
       multiple = T, accept = c('.ab1'), placeholder = 'ab1 file(s)'),
     checkboxInput('merge_ab1', 'Merge ab1 files in one query', value = FALSE)
@@ -118,7 +118,7 @@ sidebar <- sidebar(
       c("Singularity" = "singularity", "Docker" = "standard"), 
       selected = "singularity"
     ),
-    #textInput('minimap_params', 'Minimap parameters', ''),
+    selectInput('entry', 'Pipeline entry', c('mapping', 'full'), selected = 'full'),
     checkboxInput('include_variants', 'Include variants in report', value = F)
   ),
   uiOutput("copy_error_btn")
@@ -129,7 +129,6 @@ ui <- page_navbar(
   
   useShinyjs(),
   use_hover(),
-  
   
   fillable = F,
   title = tags$span(
@@ -164,14 +163,19 @@ ui <- page_navbar(
     card_header(
       id = 'header2', 
       class = 'bg-secondary', 
-      tags$a('Output', tooltip(bsicons::bs_icon("question-circle"), 'Output from the nxf-minimapper pipeline'))
+      tags$a('Output', tooltip(bsicons::bs_icon("question-circle"), 'Output from the nxf-minimapper pipeline')),
+      tags$span(
+        id = 'timer_output',
+        textOutput('run_time')
+      )
   ),
     height = 450,
     card_body(
       verbatimTextOutput('stdout')
     )
   ),
-
+  
+  
   tags$style(HTML("
   .progress-number { color: transparent !important; }
   .progress-number { display: none !important; }
@@ -179,9 +183,17 @@ ui <- page_navbar(
   progressBar(id = "pb", value = 0, total = 100, status = "warning", display_pct = FALSE, title = "")
 )
 
+# Function to format seconds into HH:MM:SS
+format_time <- function(seconds) {
+  hours <- floor(seconds / 3600)
+  minutes <- floor((seconds %% 3600) / 60)
+  secs <- seconds %% 60
+  sprintf("%02d:%02d:%02d", hours, minutes, secs)
+}
+
 server <- function(input, output, session) {
   
-  ##
+  ## 1Gb upload file size
   options(shiny.maxRequestSize=1000*1024^2)
   ##
   
@@ -313,9 +325,13 @@ server <- function(input, output, session) {
     
   })
   
-  # progress bar
+  # Reactive values for progress bar
   progress_val <- reactiveVal(0)
   proc <- reactiveVal(NULL) # store process object per session
+  
+  # Reactive values for the timer
+  process_start_time <- reactiveVal(NULL)
+  elapsed_time_sec <- reactiveVal(0)
   
   observeEvent(input$start, {
     if ((is.null(fastq()) || is.null(input$upload_ref)) & !input$demo) {
@@ -323,9 +339,14 @@ server <- function(input, output, session) {
       return()
     }
     
-    #req(input$upload_fastq)
-    #req(input$upload_ref)
-
+    
+    # entry handling, ifelse is weird, the test must be equal len as return vector
+    entry <- ifelse(
+      c(input$entry == 'mapping', TRUE), 
+      c('-entry', 'mapping'), 
+      c('', ''))
+    
+    
     nsamples <- if (input$demo) {
       3
     } else if (input$query_format == "ab1" && !is.null(input$upload_ab1)) {
@@ -339,12 +360,12 @@ server <- function(input, output, session) {
     inc <- 100/(2 + (6 * nsamples)) # 2 single proc and 6 proc that are per sample
 
      
-      if (input$demo) {
-        arguments <- c('--ref', 'www/demo/reference.gbk', '--fastq', 'www/demo/samples', '--format', 'genbank', '-ansi-log', 'false')
-      } else {
-        arguments <- c('--ref', ref(), '--fastq', fastq(), '--format', input$format, ifelse(input$include_variants, '--variants', ''), '-ansi-log', 'false')
-      }
-      
+    if (input$demo) {
+      arguments <- c('--ref', 'www/demo/reference.gbk', '--fastq', 'www/demo/samples', '--format', 'genbank', ifelse(input$include_variants, '--variants', ''), '-ansi-log', 'false')
+    } else {
+      arguments <- c('--ref', ref(), '--fastq', fastq(), '--format', input$format, ifelse(input$include_variants, '--variants', ''), '-ansi-log', 'false')
+    }
+    
       
     shinyjs::disable('controls')
     lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-secondary')})
@@ -356,20 +377,31 @@ server <- function(input, output, session) {
       'nextflow',
       args = c(
         'run', 
-        '-w', paste0('work/', runid), # allows per session cleanup
         'angelovangel/nxf-minimapper', 
-        '--outdir', file.path('www', runid), arguments, '-profile', input$profile),
+        arguments, 
+        '--outdir', file.path('www', runid), 
+        '-w', paste0('work/', runid), # allows per session cleanup
+        '-profile', input$profile,
+        entry
+      ),
       stdout = "|", stderr = "2>&1"
       #env = c("current", NXF_OFFLINE = "TRUE") # uncomment if needed
     )
     proc(p) # store process
+    process_start_time(Sys.time()) # set process start time
     
-    # Poll process output
+    # Poll process output and track time
     observe({
       invalidateLater(500, session)
       p <- proc()
       if (!is.null(p)) {
         if (p$is_alive()) {
+          # timer
+          if (!is.null(process_start_time())) {
+            new_elapsed <- as.numeric(Sys.time() - process_start_time(), units = "secs")
+            elapsed_time_sec(round(new_elapsed))
+          }
+          # timer
           lines <- p$read_output_lines()
           for (line in lines) {
             message(line)
@@ -386,6 +418,10 @@ server <- function(input, output, session) {
           }
         } else {
           # Process finished
+          # timer
+          # elapsed_time_sec(0)
+          process_start_time(NULL)
+          # timer
           lines <- p$read_all_output_lines()
           for (line in lines) {
             shinyjs::html(
@@ -395,8 +431,12 @@ server <- function(input, output, session) {
             )
           }
           if (p$get_exit_status() == 0) {
+            process_start_time(NULL) # reset process start time
             log_run(runid = runid, start_time = p$get_start_time(), nsamples = nsamples, sample_format = input$query_format, exit_status = 0)
-            notify_success('Processing finished, please download results!', position = 'center-bottom')
+            notify_success(paste0(
+              'Processing finished in ', format_time(elapsed_time_sec()), ' please download results!'), 
+              position = 'center-bottom'
+            )
             shinyjs::enable('controls')
             lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-warning')})
             lapply(c('header1', 'header2'), function(x) {shinyjs::toggleClass(id = x, class = 'bg-success')})
@@ -407,12 +447,17 @@ server <- function(input, output, session) {
             })
             output$report_ui <- renderUI({
               pathtoreport <- paste0(runid, '/00-alignment-summary.html')
-              actionLink(
-                'report', 'View HTML report',
-                onclick = sprintf("window.open('%s', '_blank')", pathtoreport)
-              )
+              if (input$entry == 'mapping') {
+                renderText('No report available')
+              } else {
+                actionLink(
+                  'report', 'View HTML report',
+                  onclick = sprintf("window.open('%s', '_blank')", pathtoreport)
+                )
+              }
             })
           } else {
+            process_start_time(NULL) # reset process time
             log_run(runid = runid, start_time = p$get_start_time(), nsamples = nsamples, sample_format = input$query_format, exit_status = p$get_exit_status())
             notify_failure('Processing failed', position = 'center-bottom')
             shinyjs::enable('controls')
@@ -436,6 +481,7 @@ server <- function(input, output, session) {
   
   observeEvent(input$reset, {
     session$reload()
+    process_start_time(NULL)
   })
 
   observeEvent(input$copy_error, {
@@ -445,6 +491,16 @@ server <- function(input, output, session) {
   notify_success("Error output copied to clipboard!", position = "center-bottom")
   })
   
+  # Output the formatted time
+  output$run_time <- renderText({
+    if (elapsed_time_sec() > 0) {
+      paste("Running time:", format_time(elapsed_time_sec()))
+    } else {
+      "" # Hide when not running or 0 seconds
+    }
+  })
+  
+  # Download
   output$download <- downloadHandler(
   filename = function() {
     paste0('results-', runid, '.tar')
